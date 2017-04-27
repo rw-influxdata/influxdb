@@ -99,6 +99,8 @@ type Handler struct {
 	Logger    zap.Logger
 	CLFLogger *log.Logger
 	stats     *Statistics
+
+	requestTracker *RequestTracker
 }
 
 // NewHandler returns a new instance of handler with routes.
@@ -204,6 +206,15 @@ func (h *Handler) Statistics(tags map[string]string) []models.Statistic {
 	}}
 }
 
+// TrackRequests begins tracking requests made to the Handler.
+// This should be called before this Handler is used to serve requests.
+func (h *Handler) TrackRequests() {
+	if h.requestTracker != nil {
+		return
+	}
+	h.requestTracker = NewRequestTracker()
+}
+
 // AddRoutes sets the provided routes on the handler.
 func (h *Handler) AddRoutes(routes ...Route) {
 	for _, r := range routes {
@@ -232,6 +243,17 @@ func (h *Handler) AddRoutes(routes ...Route) {
 
 		h.mux.Add(r.Method, r.Pattern, handler)
 	}
+}
+
+// Close closes the request tracker for the handler.
+func (h *Handler) Close() error {
+	if h.requestTracker != nil {
+		if err := h.requestTracker.Close(); err != nil {
+			return err
+		}
+		h.requestTracker = nil
+	}
+	return nil
 }
 
 // ServeHTTP responds to HTTP request to the handler.
@@ -282,6 +304,10 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user *meta.
 	defer func(start time.Time) {
 		atomic.AddInt64(&h.stats.QueryRequestDuration, time.Since(start).Nanoseconds())
 	}(time.Now())
+
+	if h.requestTracker != nil {
+		h.requestTracker.Increment(r, user)
+	}
 
 	// Retrieve the underlying ResponseWriter or initialize our own.
 	rw, ok := w.(ResponseWriter)
@@ -584,6 +610,10 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user *meta.
 		atomic.AddInt64(&h.stats.ActiveWriteRequests, -1)
 		atomic.AddInt64(&h.stats.WriteRequestDuration, time.Since(start).Nanoseconds())
 	}(time.Now())
+
+	if h.requestTracker != nil {
+		h.requestTracker.Increment(r, user)
+	}
 
 	database := r.URL.Query().Get("db")
 	if database == "" {

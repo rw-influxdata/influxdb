@@ -151,6 +151,10 @@ func (s *Service) Open() error {
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	// Begin to track requests.
+	s.Logger.Info("Tracking HTTP requests")
+	s.Handler.TrackRequests()
+
 	// Begin listening for requests in a separate goroutine.
 	go s.serveTCP()
 	return nil
@@ -168,7 +172,7 @@ func (s *Service) Close() error {
 			return err
 		}
 	}
-	return nil
+	return s.Handler.Close()
 }
 
 // WithLogger sets the logger for the service.
