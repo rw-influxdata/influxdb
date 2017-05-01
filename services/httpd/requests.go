@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/influxdata/influxdb/services/meta"
@@ -16,7 +17,7 @@ type RequestInfo struct {
 }
 
 type RequestTracker struct {
-	requests map[RequestInfo]int
+	requests map[RequestInfo]*int64
 	mu       sync.Mutex
 	wg       sync.WaitGroup
 	done     chan struct{}
@@ -24,7 +25,7 @@ type RequestTracker struct {
 
 func NewRequestTracker() *RequestTracker {
 	rt := &RequestTracker{
-		requests: make(map[RequestInfo]int),
+		requests: make(map[RequestInfo]*int64),
 		done:     make(chan struct{}),
 	}
 	rt.wg.Add(1)
@@ -44,8 +45,23 @@ func (rt *RequestTracker) Increment(req *http.Request, user *meta.UserInfo) {
 		info.Username = user.Name
 	}
 
+	// There is an entry in the request tracker. Increment that.
+	if n, ok := rt.requests[info]; ok {
+		atomic.AddInt64(n, 1)
+		return
+	}
+
+	// There is no entry in the request tracker. Create one.
 	rt.mu.Lock()
-	rt.requests[info]++
+	if n, ok := rt.requests[info]; ok {
+		// Something else created this entry while we were waiting for the lock.
+		rt.mu.Unlock()
+		atomic.AddInt64(n, 1)
+		return
+	}
+
+	val := int64(1)
+	rt.requests[info] = &val
 	rt.mu.Unlock()
 }
 
@@ -72,22 +88,21 @@ func (rt *RequestTracker) loop() {
 
 		rt.mu.Lock()
 		if len(rt.requests) == 0 {
-			rt.mu.Unlock()
 			continue
 		}
 
 		requests := rt.requests
-		rt.requests = make(map[RequestInfo]int, len(requests))
+		rt.requests = make(map[RequestInfo]*int64, len(requests))
 		rt.mu.Unlock()
 
 		wg.Add(1)
-		go func(requests map[RequestInfo]int) {
+		go func(requests map[RequestInfo]*int64) {
 			defer wg.Done()
 			rt.report(requests)
 		}(requests)
 	}
 }
 
-func (rt *RequestTracker) report(requests map[RequestInfo]int) {
+func (rt *RequestTracker) report(requests map[RequestInfo]*int64) {
 	fmt.Printf("There have been requests from %d unique locations\n", len(requests))
 }
