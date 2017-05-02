@@ -16,9 +16,16 @@ type RequestInfo struct {
 	Username string
 }
 
+func (r *RequestInfo) String() string {
+	if r.Username != "" {
+		return fmt.Sprintf("%s:%s", r.Username, r.IPAddr)
+	}
+	return r.IPAddr
+}
+
 type RequestTracker struct {
 	requests map[RequestInfo]*int64
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	wg       sync.WaitGroup
 	done     chan struct{}
 }
@@ -65,6 +72,16 @@ func (rt *RequestTracker) Increment(req *http.Request, user *meta.UserInfo) {
 	rt.mu.Unlock()
 }
 
+// Stats returns the current request map from the request tracker. This request
+// map is actively written to. Only read from the map (which does not require a
+// lock) and use atomic.LoadInt64 to read the count.
+func (rt *RequestTracker) Stats() map[RequestInfo]*int64 {
+	rt.mu.RLock()
+	requests := rt.requests
+	rt.mu.RUnlock()
+	return requests
+}
+
 func (rt *RequestTracker) Close() error {
 	close(rt.done)
 	rt.wg.Wait()
@@ -74,7 +91,6 @@ func (rt *RequestTracker) Close() error {
 func (rt *RequestTracker) loop() {
 	defer rt.wg.Done()
 
-	var wg sync.WaitGroup
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 
@@ -82,7 +98,6 @@ func (rt *RequestTracker) loop() {
 		select {
 		case <-ticker.C:
 		case <-rt.done:
-			wg.Wait()
 			return
 		}
 
@@ -94,15 +109,5 @@ func (rt *RequestTracker) loop() {
 		requests := rt.requests
 		rt.requests = make(map[RequestInfo]*int64, len(requests))
 		rt.mu.Unlock()
-
-		wg.Add(1)
-		go func(requests map[RequestInfo]*int64) {
-			defer wg.Done()
-			rt.report(requests)
-		}(requests)
 	}
-}
-
-func (rt *RequestTracker) report(requests map[RequestInfo]*int64) {
-	fmt.Printf("There have been requests from %d unique locations\n", len(requests))
 }

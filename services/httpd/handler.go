@@ -861,6 +861,22 @@ func (h *Handler) serveExpvar(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "%q: ", key)
 		w.Write(bytes.TrimSpace(val))
 	}
+
+	if h.requestTracker != nil {
+		for req, count := range h.requestTracker.Stats() {
+			if !first {
+				fmt.Fprintln(w, ",")
+			}
+			first = false
+
+			value := atomic.LoadInt64(count)
+			fmt.Fprintf(w, "\"http-client:%s\": {\"name\":\"http_client_write_stats\",\"tags\":{\"ip-addr\":%q", req.String(), req.IPAddr)
+			if req.Username != "" {
+				fmt.Fprintf(w, ",\"user\":%q", req.Username)
+			}
+			fmt.Fprintf(w, "},\"values\":{\"requests\":%d}}", value)
+		}
+	}
 	fmt.Fprintln(w, "\n}")
 }
 
